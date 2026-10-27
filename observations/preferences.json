@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-10-20T23:31:43.329+08:00",
+  "body_area": "触控板两侧掌托，手掌根部及手腕接触处",
+  "objective": "风扇应在掌托出现这种温热感之前介入，尽量避免温热。",
+  "warm_sample_interpretation": "需要尽量避免的状态；只到达这个状态才开始介入已经偏晚。",
+  "control_strategy_to_evaluate": "通过多次体感对照寻找提前出现的温度信号，评估升温趋势和热传导滞后，提前渐进增加风扇转速。",
+  "numerical_thresholds": null,
+  "source_sample_id": "A7FF7C8E-20AB-4D11-9297-4EEAD6DE9293",
+  "user_statement": "不是“达到希望风扇介入的程度”而是希望风扇早就开始介入并尽量避免这种温热了",
+  "comfortable_behavior": "恢复正常或舒适后继续由 SmartFan 自动接管，只降低转速；温度或升温趋势再次上升时自动提速。不能把恢复舒适解释为关闭主动控制或恢复系统控速。",
+  "safety_behavior": "保留 CPU 保护；用户明确关闭或退出时释放控制。休眠时暂时释放，保留开启意愿并在唤醒后恢复。短暂失联先释放再自动重连；硬件故障、签名错误、其他控制器冲突或连续恢复失败时明确报错并停止。",
+  "latest_comfortable_sample_id": "1DBBAE26-DC4F-4F1A-B4C9-4F5339634265",
+  "latest_comfortable_statement": "现在感觉不需要降温了；正常温度下仍由程序接管，只不过转速调小。",
+  "cold_behavior": "用户明确接受：冰凉时 SmartFan 开关保持开启并持续监测，低温暂用硬件自动模式以允许停转，升温或保护条件触发后程序自动重新接管。硬件是否实际停转由硬件决定。",
+  "cold_behavior_authorization": "接受低温自动待机，升温重新接管",
+  "latest_cold_sample_id": "5531E7B9-BFED-4AF6-A107-415A31BF2DC3",
+  "latest_cold_statement": "现在这个温度是冰凉，风扇不应该转的"
+}
