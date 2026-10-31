@@ -237,7 +237,9 @@ enum PrivilegedHelper {
                     mode = request.mode; manualRPM = request.manualRPM
                     if changed || ProcessInfo.processInfo.systemUptime - lastTick >= 1.5 { try update() }
                 }
-                try SessionIPC.send(HelperResponse(snapshot: latest, mode: mode, targets: targets, reason: reason, error: nil), fd: client)
+                try SessionIPC.send(HelperResponse(snapshot: latest, mode: mode, targets: targets, reason: reason, error: nil,
+                                                   coolingPhase: mode == .system ? nil : policy.coolingPhase,
+                                                   bodyCooling: mode == .automatic ? policy.bodyCooling : false), fd: client)
             } catch {
                 fatalError = String(describing: error)
                 fatalRetryable = error is RecoverableControlError || error is ControlTransportError

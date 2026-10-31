@@ -51,8 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     private let fanTarget = NSTextField(labelWithString: "—")
     private let power = NSTextField(labelWithString: "—")
     private let time = NSTextField(labelWithString: "每 2 秒更新")
-    private let manualHint = NSTextField(wrappingLabelWithString: "手动模式也保留 CPU 过热保护。")
-    private let version = "1.6"
+    private let manualHint = NSTextField(wrappingLabelWithString: "日常上限 5000 RPM；紧急过热时可全速。")
+    private let version = "1.9"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -168,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let manualRow = NSStackView(views: [slider, manualField, label("RPM", size: 11)])
         manualRow.orientation = .horizontal; stack.addArrangedSubview(manualRow)
         manualHint.font = .systemFont(ofSize: 10); manualHint.textColor = .secondaryLabelColor
+        manualHint.heightAnchor.constraint(equalToConstant: 28).isActive = true
         stack.addArrangedSubview(manualHint)
         stack.addArrangedSubview(divider())
         let footer = NSStackView(views: [power, NSView(), time])
@@ -222,12 +223,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             manualHint.stringValue = controller.installing ? "首次安装或更新服务需要授权，转速尚未应用。" : "正在连接后台服务，转速尚未应用。"
         } else if controller.enabled && !manual && controller.targets.isEmpty {
             manualHint.stringValue = "持续监测中；硬件自行决定停转，升温自动接管。"
+        } else if controller.enabled && controller.coolingPhase != nil && controller.coolingPhase != .normal {
+            manualHint.stringValue = "过热保护及恢复期间可高于 5000 RPM。\n温度稳定后逐步恢复日常上限。"
+        } else if controller.enabled && controller.bodyCooling {
+            manualHint.stringValue = "按电池与掌托参考维持散热，上限 5000 RPM。\n参考温度持续降温 2 分钟后再缓慢降速。"
         } else if !manual {
-            manualHint.stringValue = "滑块实时显示实际转速，每 2 秒更新。"
+            manualHint.stringValue = "日常上限 5000 RPM，紧急过热可全速。\n滑块显示实际转速，每 2 秒更新。"
         } else if !controller.enabled {
             manualHint.stringValue = "开启「风扇控制」即可应用；首次安装服务需要授权。"
         } else {
-            manualHint.stringValue = manual ? "手动模式也保留 CPU 过热保护。" : "自动曲线会提前升速，并延迟缓慢降速。"
+            manualHint.stringValue = "日常上限 5000 RPM；CPU 保护可提高设定，紧急过热时可全速。"
         }
     }
 
@@ -240,7 +245,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         manualField.drawsBackground = manual
         if manual {
             slider.minValue = fans.map(\.minimum).max() ?? 1200
-            slider.maxValue = fans.map(\.maximum).min() ?? 7200
+            slider.maxValue = max(slider.minValue, fans.map { ControlPolicy.normalMaximum(for: $0) }.min()
+                                  ?? ControlPolicy.normalMaximumRPM)
             slider.doubleValue = controller.manualRPM
             if manualField.currentEditor() == nil {
                 manualField.stringValue = String(Int(controller.manualRPM.rounded()))
@@ -282,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "SmartFan \(version) · 提前保持舒适"
-        alert.informativeText = "自动模式取体感参考 Ts1P、电池温度与 CPU 保护曲线中的较高转速。\n\n舒适区低速维持：Ts1P ≤ 30°C、电池 ≤ 33.8°C 时降低转速，仍保持自动接管。Ts1P 30.5 / 31°C 对应约 2600 / 4000 RPM；电池 34.2 / 34.8°C 对应约 2600 / 5000 RPM。升温趋势可能提前提高转速。\n\n冰凉时自动待机：参考温度持续偏低 20 秒后暂用硬件自动模式，允许自行停转；开关与监测保持开启。温度上升或 CPU ≥ 75°C 时自动重新接管。\n\nCPU ≥ 92°C 或严重热压力时使用最高转速，手动模式也保留保护。休眠时暂时释放，唤醒后自动恢复原来的控制；短暂断连会自动重连，连续失败或硬件故障会明确报错。用户关闭或退出时释放控制。\n\n这些曲线仍需按你的体感校准，传感器位置尚未核实。每 30 秒保存温度记录，并记录控制暂停与恢复的原因。"
+        alert.informativeText = "自动模式主要按电池、充电状态、Ts1P 与 Ts0P 掌托候选参考控制风量；CPU 曲线保留为安全保护。\n\n自动与手动模式的日常目标上限均为 5000 RPM（仍受硬件范围限制）；紧急过热可突破上限至硬件最高转速。全速后需 CPU ≤86°C 且系统无热压力连续 15 秒，再以每秒最多 150 RPM 平稳降回日常上限。CPU 回升至 88°C 或出现热压力时暂缓降速，再次触发紧急条件则立即全速。\n\n更早预冷：电池 31 / 32 / 33°C 对应约 2200 / 3800 / 5000 RPM，充电时提前 0.5°C；Ts1P 29 / 30°C 对应约 3200 / 5000 RPM，Ts0P 31 / 31.5°C 对应约 3500 / 5000 RPM。升温趋势还可提前提高转速。达到积热条件后保持日常上限；只有预测 Ts1P ≤29°C、电池参考 ≤32°C、Ts0P ≤31°C 且无热压力持续 2 分钟，才解除保持并缓慢降速。CPU 降温不会单独解除机身散热。\n\n冰凉时自动待机：参考温度持续偏低 20 秒后暂用硬件自动模式，允许自行停转；开关与监测保持开启。温度上升或 CPU ≥ 75°C 时自动重新接管。\n\nCPU ≥ 92°C 或严重热压力时使用最高转速，手动模式也保留保护。休眠时暂时释放，唤醒后自动恢复原来的控制；短暂断连会自动重连，连续失败或硬件故障会明确报错。用户关闭或退出时释放控制。\n\n这些曲线仍需按你的体感校准，传感器位置尚未核实。每 30 秒保存温度记录，并记录控制暂停与恢复的原因。"
         alert.addButton(withTitle: "知道了"); alert.runModal()
     }
     @objc private func willSleep() { controller.prepareForSleep() }
@@ -301,7 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         detailLabel.stringValue = "提前散热 · 体感与电池温度"
         refreshSpeedDisplay(manual: false, canAdjust: false,
                             fans: [FanReading(index: 0, minimum: 1200, maximum: 7200, actual: 3600, target: 3600, mode: 1)])
-        manualHint.stringValue = "滑块实时显示实际转速，每 2 秒更新。"
+        manualHint.stringValue = "日常上限 5000 RPM，紧急过热可全速。\n滑块显示实际转速，每 2 秒更新。"
         panel.wantsLayer = true
         panel.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         panel.layoutSubtreeIfNeeded()
@@ -355,8 +361,8 @@ enum MenuApplication {
         if let index = CommandLine.arguments.firstIndex(of: "--manual-rpm") {
             guard CommandLine.arguments.count > index + 1,
                   let value = Double(CommandLine.arguments[index + 1]), value.isFinite,
-                  value >= 1000, value <= 15000 else {
-                fputs("--manual-rpm 需要 1000–15000 范围内的数值；实际设置还会限制在硬件允许范围。\n", stderr)
+                  value >= 1000, value <= ControlPolicy.normalMaximumRPM else {
+                fputs("--manual-rpm 需要 1000–5000 范围内的数值；实际设置还会限制在硬件允许范围，紧急过热仍可全速。\n", stderr)
                 exit(1)
             }
             manualRPM = value

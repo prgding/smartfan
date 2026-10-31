@@ -28,7 +28,8 @@ final class ObservationStore {
         defer { try? file.close() }
         try file.seekToEnd(); try file.write(contentsOf: data)
     }
-    func append(snapshot: ThermalSnapshot, feeling: String, mode: FanMode, note: String) throws {
+    func append(snapshot: ThermalSnapshot, feeling: String, mode: FanMode, note: String,
+                coolingPhase: CoolingPhase? = nil, bodyCooling: Bool? = nil) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let formatter = ISO8601DateFormatter()
         formatter.timeZone = .current
@@ -39,6 +40,9 @@ final class ObservationStore {
             "schema_version": 1, "id": UUID().uuidString, "captured_at": stamp,
             "source": "SmartFanMenuBar", "feeling": feeling, "note": note,
             "control_mode": mode.rawValue, "temperature_c": snapshot.temperatures,
+            "thermal_pressure": snapshot.thermalPressure,
+            "cooling_phase": coolingPhase?.rawValue as Any? ?? NSNull(),
+            "body_cooling": bodyCooling as Any? ?? NSNull(),
             "power": ["source": snapshot.powerSource, "is_charging": snapshot.isCharging as Any? ?? NSNull()],
             "fans": snapshot.fans.map { ["index": Double($0.index), "actual_rpm": $0.actual,
                                           "target_rpm": $0.target, "mode_raw": Double($0.mode)] }
@@ -71,6 +75,8 @@ final class AppController {
     var manualRPM = 3000.0
     var allowsServiceInstallation = true
     private(set) var targets: [Int: Double] = [:]
+    private(set) var coolingPhase: CoolingPhase?
+    private(set) var bodyCooling = false
     let observations = ObservationStore()
     private let worker = DispatchQueue(label: "SmartFan.hardware", qos: .utility)
     private var reader: SensorReader?
@@ -114,7 +120,9 @@ final class AppController {
 
     init() {
         let saved = UserDefaults.standard.double(forKey: "manualRPM")
-        if saved.isFinite && saved >= 1000 && saved <= 15000 { manualRPM = saved }
+        if saved.isFinite && saved >= 1000 && saved <= 15000 {
+            manualRPM = min(saved, ControlPolicy.normalMaximumRPM)
+        }
     }
 
     func startMonitoring() {
@@ -272,6 +280,8 @@ final class AppController {
         let currentGeneration = generation
         guard let id = session, let secret = token else {
             sessionConnected = false
+            coolingPhase = nil
+            bodyCooling = false
             enabled = false; authorizing = false; targets = [:]; errorMessage = nil; onChange?(); completion?(); return
         }
         stopping = true; message = "正在恢复系统控制…"; onChange?()
@@ -316,7 +326,7 @@ final class AppController {
                 self.sessionConnected = false
                 if let restoredSnapshot { self.snapshot = restoredSnapshot }
                 self.session = nil; self.token = nil; self.enabled = false; self.authorizing = false
-                self.stopping = false; self.targets = [:]; self.errorMessage = failure
+                self.stopping = false; self.targets = [:]; self.coolingPhase = nil; self.bodyCooling = false; self.errorMessage = failure
                 self.message = failure ?? "系统自动控制"
                 self.onChange?(); self.poll(); completion?()
             }
@@ -327,7 +337,8 @@ final class AppController {
     func updateManual(_ rpm: Double) {
         guard rpm.isFinite else { return }
         let minimum = snapshot?.fans.map(\.minimum).max() ?? 1200
-        let maximum = snapshot?.fans.map(\.maximum).min() ?? 7200
+        let maximum = max(minimum, snapshot?.fans.map { ControlPolicy.normalMaximum(for: $0) }.min()
+                          ?? ControlPolicy.normalMaximumRPM)
         manualRPM = clamp(rpm, minimum, maximum)
         UserDefaults.standard.set(manualRPM, forKey: "manualRPM")
         onChange?()
@@ -359,7 +370,8 @@ final class AppController {
                 if let snapshot, Date().timeIntervalSince(self.lastLog) >= 30 {
                     do {
                         try self.observations.append(snapshot: snapshot, feeling: "unknown", mode: response?.mode ?? .system,
-                                                     note: "定时温度记录，未报告体感")
+                                                     note: "定时温度记录，未报告体感", coolingPhase: response?.coolingPhase,
+                                                     bodyCooling: response?.bodyCooling)
                         self.lastLog = Date()
                     } catch { /* Monitoring and control remain available if logging fails. */ }
                 }
@@ -389,6 +401,22 @@ final class AppController {
                         self.lifecycle.connected(now: ProcessInfo.processInfo.systemUptime)
                         if !wasConnected { self.logEvent("control_connected", "已恢复\(self.selectedMode == .manual ? "手动" : "自动")控速") }
                     }
+                    if let phase = response.coolingPhase, phase != self.coolingPhase,
+                       phase != .normal || self.coolingPhase != nil {
+                        let cpu = snapshot?.cpu.map { String(format: "%.1f", $0) } ?? "不可用"
+                        let pressure = snapshot.map { String($0.thermalPressure) } ?? "不可用"
+                        self.logEvent("cooling_phase_changed", "\(phase.rawValue)；\(response.reason)；CPU=\(cpu)°C，thermalPressure=\(pressure)；\(self.fanState(snapshot))")
+                    }
+                    self.coolingPhase = response.coolingPhase
+                    let bodyCooling = response.bodyCooling == true
+                    if bodyCooling != self.bodyCooling {
+                        let battery = snapshot?.battery.map { String(format: "%.1f", $0) } ?? "不可用"
+                        let primary = snapshot?.primary.map { String(format: "%.1f", $0) } ?? "不可用"
+                        let secondary = snapshot?.secondary.map { String(format: "%.1f", $0) } ?? "不可用"
+                        self.logEvent(bodyCooling ? "body_cooling_started" : "body_cooling_released",
+                                      "\(response.reason)；电池=\(battery)°C，Ts1P=\(primary)°C，Ts0P=\(secondary)°C；\(self.fanState(snapshot))")
+                    }
+                    self.bodyCooling = bodyCooling
                     self.targets = response.targets; self.message = response.reason; self.errorMessage = nil
                     if response.mode == .automatic {
                         let isStandby = response.targets.isEmpty
@@ -487,7 +515,7 @@ final class AppController {
         generation += 1
         shutdown()
         sessionConnected = false; session = nil; token = nil
-        enabled = false; authorizing = false; stopping = false; targets = [:]
+        enabled = false; authorizing = false; stopping = false; targets = [:]; coolingPhase = nil; bodyCooling = false
         message = lifecycle.requested ? "休眠中 · 唤醒后自动恢复控速" : "休眠中"
         onChange?()
     }

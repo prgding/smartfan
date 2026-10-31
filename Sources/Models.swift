@@ -2,6 +2,7 @@ import Foundation
 import IOKit.ps
 
 enum FanMode: String, Codable { case system, automatic, manual }
+enum CoolingPhase: String, Codable { case normal, emergency, recovery }
 
 struct FanReading: Codable {
     let index: Int
@@ -108,6 +109,8 @@ struct HelperResponse: Codable {
     let reason: String
     let error: String?
     var retryable: Bool? = nil
+    var coolingPhase: CoolingPhase? = nil
+    var bodyCooling: Bool? = nil
 
     func checkError() throws {
         guard let error else { return }
