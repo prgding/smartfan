@@ -40,9 +40,19 @@ struct ServiceInstallation: Codable, Equatable {
 }
 
 enum TrustedFile {
-    static func check(_ path: String, directory: Bool = false) throws {
+    static func check(_ path: String, directory: Bool = false, pendingCreation: Bool = false) throws {
         var info = stat()
-        guard lstat(path, &info) == 0, info.st_uid == 0, info.st_mode & 0o022 == 0,
+        guard lstat(path, &info) == 0 else {
+            let code = errno
+            // launchd can start the app before the daemon creates its runtime directory.
+            // Only this explicitly selected path may be absent while waiting for startup;
+            // missing installation files and actual access failures remain hard errors.
+            if pendingCreation && code == ENOENT {
+                throw ControlTransportError("后台服务尚未就绪，等待启动：\(path)")
+            }
+            throw SamplingError("无法检查后台服务文件：\(path)（\(String(cString: strerror(code)))，errno=\(code)）")
+        }
+        guard info.st_uid == 0, info.st_mode & 0o022 == 0,
               info.st_mode & S_IFMT == (directory ? S_IFDIR : S_IFREG) else {
             throw SamplingError("后台服务文件权限无效：\(path)")
         }
@@ -141,7 +151,7 @@ struct ServiceResponse: Codable {
 
 enum ServiceClient {
     static func request(_ request: ServiceRequest, installation: ServiceInstallation) throws {
-        try TrustedFile.check(ServicePaths.runtimeDirectory, directory: true)
+        try TrustedFile.check(ServicePaths.runtimeDirectory, directory: true, pendingCreation: true)
         let fd = try SessionIPC.connect(path: ServicePaths.socket)
         defer { close(fd) }
         _ = try CodeIdentity.peer(fd, uid: 0, hash: installation.helperHash)

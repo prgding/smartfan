@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-10-28T22:49:33+08:00",
+  "updated_at": "2026-11-09T16:12:18+08:00",
   "body_area": "触控板两侧掌托，手掌根部及手腕接触处",
   "objective": "风扇应在掌托出现这种温热感之前介入，尽量避免温热。",
   "warm_sample_interpretation": "需要尽量避免的状态；只到达这个状态才开始介入已经偏晚。",
@@ -21,37 +21,55 @@
   "emergency_override": "CPU 指标 ≥92°C 或系统严重热压力时立即使用硬件最高转速。全速后，CPU ≤86°C 且无热压力持续 15 秒，再以每秒最多 150 RPM 平稳降回日常上限；恢复时 CPU ≥88°C 或出现热压力暂停降速，再次触发紧急条件立即全速。保护与恢复阶段可临时高于 5000 RPM。",
   "maximum_rpm_authorization": "日常上限 5000，紧急过热仍可全速（推荐）",
   "latest_speed_feedback": "经常在 5000 RPM 和最大转速之间突然来回切换，希望切换平稳。",
-  "latest_warm_sample_id": "A06467EF-86E3-4CE4-A4EC-BA02D846B914",
-  "latest_warm_statement": "不行，感觉有点压不住，现在就感觉温热，是希望避免的手托温度，现在就改策略。CPU 不高但能感觉温热。",
+  "latest_warm_sample_id": "D6581F0D-9D4B-46A2-B45B-B2B6A86685BD",
+  "latest_warm_statement": "现在cpu不是很热，但是掌托暖暖的",
   "latest_warm_context": {
-    "captured_at": "2026-10-28T22:43:01.637+08:00",
-    "app_version": "1.8",
+    "captured_at": "2026-11-09T16:06:59.825+08:00",
+    "app_version": "1.9.1",
     "temperature_c": {
-      "Ts0P": 31.996,
-      "Ts1P": 28.996,
-      "TB0T": 33.9,
-      "TB1T": 33.9,
-      "TB2T": 33.5
+      "Ts0P": 29.996,
+      "Ts1P": 26.996,
+      "TB0T": 31.3,
+      "TB1T": 31.3,
+      "TB2T": 30.1
     },
-    "cpu_indicator_c": 61.969,
+    "cpu_indicator_c": 75.594,
     "fans": [
       {
-        "actual_rpm": 4732.54541015625,
+        "actual_rpm": 4062.288330078125,
         "index": 0,
         "mode_raw": 1,
-        "target_rpm": 4694.53125
+        "target_rpm": 4092.96875
       }
     ],
     "power": {
-      "battery_percent": 51,
-      "is_charging": true,
+      "battery_percent": 100,
+      "is_charging": false,
       "source": "AC Power"
     },
-    "interpretation": "用户再次明确标注为需要避免的温热，并要求立即修改策略。作为 1.9 修改前对照；不将该点作为首次散热介入阈值。"
+    "interpretation": "用户报告掌托暖，并明确选择直接调整、以掌托更凉为优先。这是收到反馈后的只读采样，与截图分开记录；不是首次散热介入阈值。",
+    "user_screenshot": {
+      "captured_at": null,
+      "temperature_c": {
+        "Ts1P": 27.0,
+        "Ts0P": 29.0
+      },
+      "battery_max_c": 31.3,
+      "cpu_indicator_c": 68.0,
+      "fan_actual_rpm": 3911,
+      "fan_target_rpm": 3418,
+      "interpretation": "读自用户截图的四舍五入显示值；截图时刻未提供，不与后续采样拼接。"
+    },
+    "prior_event": {
+      "captured_at": "2026-11-09T16:03:58.780+08:00",
+      "cpu_indicator_c": 93.5,
+      "event": "cooling_phase_changed",
+      "interpretation": "既有日志记录短暂 CPU 过热，随后快速降温；与余热滞后相容，但不能证明具体掌托热源。"
+    }
   },
   "comfort_strategy_revision": {
-    "version": "1.9",
-    "objective": "以机身体感参考提前散热，CPU 降温不单独触发降速。",
+    "version": "1.9.2",
+    "objective": "在电池参考达到本次 31.3°C 温热区间前提高风量，机身持续降温后再减速。",
     "automatic_references": [
       "battery_max",
       "charging",
@@ -61,29 +79,27 @@
     ],
     "battery_curve_c_rpm": [
       [
-        30.5,
+        29.5,
         1200
       ],
       [
-        31,
+        30,
         2200
       ],
       [
-        32,
+        30.5,
         3800
       ],
       [
-        32.5,
-        4500
-      ],
-      [
-        33,
+        31,
         5000
       ]
     ],
     "charging_anticipation_c": 0.5,
-    "body_hold_enter": "预测 Ts1P ≥30°C、充电修正后的电池参考 ≥33°C 或可用 Ts0P ≥31.5°C 任一满足，自动模式保持日常上限。",
-    "body_hold_release": "预测 Ts1P ≤29°C、充电修正后的电池参考 ≤32°C、可用 Ts0P ≤31°C 且无热压力连续 120 秒，再平滑降速；不依据 CPU 降温单独解除。",
-    "sensor_location_caveat": "这些温度仍是经验参考，未核实为掌托表面温度；5000 RPM 的实际体感效果需后续对照。"
-  }
+    "body_hold_enter": "预测 Ts1P ≥30°C、充电修正后的电池参考 ≥31°C 或可用 Ts0P ≥31.5°C 任一满足，自动模式保持日常上限。",
+    "body_hold_release": "预测 Ts1P ≤28°C、充电修正后的电池参考 ≤30.2°C、可用 Ts0P ≤29°C 且无热压力连续 180 秒，再平滑降速；不依据 CPU 降温单独解除。",
+    "sensor_location_caveat": "这些温度仍是经验参考，未核实为掌托表面温度；5000 RPM 的实际体感效果需后续对照。",
+    "standby": "积热保持已解除且保护处于正常阶段；同一较低温度区间、CPU <70°C、无热压力连续 20 秒进入待机；预测 Ts1P ≥29°C、充电修正后的电池参考 ≥30.5°C、可用 Ts0P ≥30°C、CPU ≥75°C 或有热压力时重新接管。"
+  },
+  "latest_comfort_adjustment_authorization": "直接调整，以掌托更凉为优先"
 }
