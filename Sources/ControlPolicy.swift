@@ -48,6 +48,10 @@ struct ControlPolicy {
         // Charging adds heat before the battery reference catches up. These are
         // empirical comfort references, not measurements of the palm-rest surface.
         let comfortBattery = predictedB + (snapshot.isCharging == true ? 0.5 : 0)
+        // The November warm sample already has battery ≈31.3°C with Ts1P ≈27°C.
+        // CPU and primary-reference cooling alone cannot establish body comfort.
+        let comfortable = predictedP <= 28 && comfortBattery <= 30.2 &&
+            (snapshot.secondary.map { $0 <= 29 } ?? true)
         smoothedPrimary = p; smoothedBattery = b; lastTime = now
         if lastMode != mode {
             downSince.removeAll()
@@ -73,28 +77,29 @@ struct ControlPolicy {
             } else { emergencyCoolSince = nil }
         }
         if mode == .automatic {
-            let warmBody = predictedP >= 30 || comfortBattery >= 33 || (snapshot.secondary.map { $0 >= 31.5 } ?? false)
-            let coolBody = predictedP <= 29 && comfortBattery <= 32 &&
-                (snapshot.secondary.map { $0 <= 31 } ?? true) && snapshot.thermalPressure == 0
+            let warmBody = predictedP >= 30 || comfortBattery >= 31 || (snapshot.secondary.map { $0 >= 31.5 } ?? false)
+            let coolBody = comfortable && snapshot.thermalPressure == 0
             if warmBody {
                 bodyCooling = true; bodyCoolSince = nil
             } else if bodyCooling {
                 if !continuous { bodyCoolSince = nil }
                 if coolBody {
                     if bodyCoolSince == nil { bodyCoolSince = now }
-                    if now - bodyCoolSince! >= 120 { bodyCooling = false; bodyCoolSince = nil }
+                    if now - bodyCoolSince! >= 180 { bodyCooling = false; bodyCoolSince = nil }
                 } else { bodyCoolSince = nil }
             }
         } else {
             // Manual control cannot silently accumulate time toward automatic release.
             bodyCoolSince = nil
         }
-        // User-labelled cold sample: Ts1P ≈ 27°C, battery ≈ 29.4°C.
+        // User-labelled cold samples: Ts1P ≈27–28°C, Ts0P ≈29°C, battery 29.4–30.2°C.
         // Standby keeps the automatic session alive; firmware decides whether to stop.
         if mode == .automatic && coolingPhase == .normal && !bodyCooling {
-            let cold = predictedP <= 28 && predictedB <= 30.5 && cpu < 70 && snapshot.thermalPressure == 0
-            let needsCooling = predictedP >= 29 || predictedB >= (snapshot.isCharging == true ? 31 : 32) ||
+            let cold = comfortable && cpu < 70 && snapshot.thermalPressure == 0
+            let needsCooling = predictedP >= 29 || comfortBattery >= 30.5 ||
+                (snapshot.secondary.map { $0 >= 30 } ?? false) ||
                 cpu >= 75 || snapshot.thermalPressure >= 1
+            if !continuous { coldSince = nil }
             if inStandby && needsCooling { inStandby = false; coldSince = nil }
             if !inStandby {
                 if cold {
@@ -107,14 +112,13 @@ struct ControlPolicy {
                 return ([:], "低温待机 · 持续监测，升温自动接管", true)
             }
         } else { inStandby = false; coldSince = nil }
-        // The latest warm samples include Ts1P ≈29, Ts0P ≈32 and battery 33.9–34.8°C
-        // with a cool CPU. Start earlier and keep airflow until body references settle.
+        // Reach the daily ceiling before the new 31.3°C warm battery reference,
+        // while retaining the historical cold samples and the charging lead.
         let comfortP = Self.interpolate(predictedP, points: [(27.5, 1200), (28, 1800), (29, 3200), (30, 5000)])
-        let comfortB = Self.interpolate(comfortBattery, points: [(30.5, 1200), (31, 2200), (32, 3800), (32.5, 4500), (33, 5000)])
+        let comfortB = Self.interpolate(comfortBattery, points: [(29.5, 1200), (30, 2200), (30.5, 3800), (31, 5000)])
         let comfortS = snapshot.secondary.map {
             Self.interpolate($0, points: [(29, 1200), (30, 2000), (31, 3500), (31.5, 5000)])
         } ?? 0
-        let comfortable = predictedP <= 29 && comfortBattery <= 32 && (snapshot.secondary.map { $0 <= 31 } ?? true)
         let protection = Self.interpolate(cpu, points: [(60, 1200), (70, 2400), (80, 4000), (85, 5400), (90, 8000)])
         let comfort = max(max(comfortP, comfortB), max(comfortS, bodyCooling ? Self.normalMaximumRPM : 0))
         let base = mode == .manual ? manualRPM : comfort

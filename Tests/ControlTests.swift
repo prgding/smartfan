@@ -18,6 +18,69 @@ private func snapshot(primary: Double? = 30, battery: Double = 34, cpu: Double =
         powerSource: "AC Power", isCharging: charging, thermalPressure: pressure)
 }
 
+private func checkServiceStartup() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("smartfan-startup-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let pending = directory.appendingPathComponent("not-created-yet").path
+    var lifecycle = ControlLifecycle()
+    lifecycle.enable()
+    // Replay both the failed start and its cleanup request before the daemon is ready.
+    for attempt in 0..<6 {
+        do {
+            try TrustedFile.check(pending, directory: true, pendingCreation: true)
+            fatalError("missing runtime directory was accepted")
+        } catch {
+            expect(error is ControlTransportError, "a not-yet-created runtime directory is a retryable connection failure")
+            expect(!String(describing: error).contains("权限无效"), "startup delay is not reported as invalid permissions")
+            lifecycle.failed(now: Double(attempt * 60), retryable: error is ControlTransportError)
+            expect(lifecycle.requested && lifecycle.retryAt != nil, "startup and cleanup failures preserve the switch beyond three attempts")
+        }
+    }
+    // The service becoming ready continues through the existing read-only release gate.
+    let retry = lifecycle.retryAt!
+    expect(lifecycle.reconnectReadiness(now: retry, fans: snapshot(mode: 0).fans, conflictingApp: false) == .confirmingRelease,
+           "delayed startup still confirms the fan is released before connecting")
+    expect(lifecycle.reconnectReadiness(now: retry + 2, fans: snapshot(mode: 0).fans, conflictingApp: false) == .ready,
+           "delayed startup can reconnect after continuous system-mode readings")
+    lifecycle.connected(now: retry + 2)
+    expect(lifecycle.requested && lifecycle.retryAt == nil, "successful delayed startup leaves automatic control enabled")
+    do {
+        try TrustedFile.check(pending)
+        fatalError("missing installation file was accepted")
+    } catch {
+        expect(!(error is ControlTransportError), "missing installation files never inherit runtime startup retries")
+        expect(String(describing: error).contains("errno=\(ENOENT)"), "failed filesystem checks retain the actual system error")
+    }
+    try TrustedFile.check("/private", directory: true, pendingCreation: true)
+    expect(true, "an existing root-owned protected directory still passes the trust check")
+    let link = directory.appendingPathComponent("link").path
+    guard symlink(pending, link) == 0 else { throw SamplingError("test symlink creation failed") }
+    do {
+        try TrustedFile.check(link, directory: true, pendingCreation: true)
+        fatalError("dangling symlink was accepted")
+    } catch {
+        expect(!(error is ControlTransportError), "a dangling symlink is an integrity fault, not pending creation")
+    }
+    if geteuid() != 0 {
+        do {
+            try TrustedFile.check(directory.path, directory: true, pendingCreation: true)
+            fatalError("user-owned runtime directory was accepted")
+        } catch {
+            expect(!(error is ControlTransportError), "existing unsafe ownership still stops control")
+        }
+        guard chmod(directory.path, 0) == 0 else { throw SamplingError("test directory access setup failed") }
+        defer { chmod(directory.path, 0o700) }
+        do {
+            try TrustedFile.check(pending, directory: true, pendingCreation: true)
+            fatalError("inaccessible directory was accepted")
+        } catch {
+            expect(!(error is ControlTransportError) && String(describing: error).contains("errno=\(EACCES)"),
+                   "real access denial stays a hard error with its precise cause")
+        }
+    }
+}
+
 private func checkBodyComfort() throws {
     var warmPolicy = ControlPolicy()
     for (index, cpu) in [75.0, 60, 55, 70, 50].enumerated() {
@@ -29,7 +92,7 @@ private func checkBodyComfort() throws {
     }
     for warmSnapshot in [snapshot(primary: 27, battery: 33, cpu: 45, actual: 5000, secondary: 29),
                          snapshot(primary: 30, battery: 30, cpu: 45, actual: 5000, secondary: 29),
-                         snapshot(primary: 28, battery: 31, cpu: 45, actual: 5000, secondary: 31.5)] {
+                         snapshot(primary: 28, battery: 30, cpu: 45, actual: 5000, secondary: 31.5)] {
         var policy = ControlPolicy()
         let decision = try policy.targets(snapshot: warmSnapshot, mode: .automatic, manualRPM: 3000, now: 0)
         expect(policy.bodyCooling && decision.values[0] == 5000,
@@ -38,69 +101,149 @@ private func checkBodyComfort() throws {
     var uncharged = ControlPolicy(), charged = ControlPolicy(), unknownCharge = ControlPolicy()
     var unchargedTarget = 0.0, chargedTarget = 0.0, unknownTarget = 0.0
     for tick in 0...10 {
-        unchargedTarget = try uncharged.targets(snapshot: snapshot(primary: 27.5, battery: 32.5, cpu: 45, secondary: 29),
+        unchargedTarget = try uncharged.targets(snapshot: snapshot(primary: 27.5, battery: 30.5, cpu: 45, secondary: 29),
             mode: .automatic, manualRPM: 3000, now: Double(tick * 2)).values[0]!
-        chargedTarget = try charged.targets(snapshot: snapshot(primary: 27.5, battery: 32.5, cpu: 45, secondary: 29, charging: true),
+        chargedTarget = try charged.targets(snapshot: snapshot(primary: 27.5, battery: 30.5, cpu: 45, secondary: 29, charging: true),
             mode: .automatic, manualRPM: 3000, now: Double(tick * 2)).values[0]!
-        unknownTarget = try unknownCharge.targets(snapshot: snapshot(primary: 27.5, battery: 32.5, cpu: 45, secondary: 29, charging: nil),
+        unknownTarget = try unknownCharge.targets(snapshot: snapshot(primary: 27.5, battery: 30.5, cpu: 45, secondary: 29, charging: nil),
             mode: .automatic, manualRPM: 3000, now: Double(tick * 2)).values[0]!
     }
-    expect(unchargedTarget == 4500 && chargedTarget == 5000,
+    expect(unchargedTarget == 3800 && chargedTarget == 5000,
            "charging reaches the daily ceiling half a degree earlier than the battery curve alone")
     expect(unknownTarget == unchargedTarget, "missing charging status leaves the base body-temperature control intact")
 
     var hold = ControlPolicy()
-    _ = try hold.targets(snapshot: snapshot(primary: 28, battery: 31, cpu: 50, actual: 5000, secondary: 32),
+    _ = try hold.targets(snapshot: snapshot(primary: 28, battery: 30.2, cpu: 70, actual: 5000, secondary: 32),
                           mode: .automatic, manualRPM: 3000, now: 0)
-    for now in stride(from: 2.0, through: 120.0, by: 2) {
-        let decision = try hold.targets(snapshot: snapshot(primary: 28, battery: 31, cpu: 50, secondary: 30),
+    for now in stride(from: 2.0, through: 180.0, by: 2) {
+        let decision = try hold.targets(snapshot: snapshot(primary: 28, battery: 30.2, cpu: 70, secondary: 29),
                                          mode: .automatic, manualRPM: 3000, now: now)
         expect(decision.values[0] == 5000 && hold.bodyCooling,
-               "body cooling requires two minutes of cool references before reducing airflow")
+               "body cooling requires three minutes of cool references before reducing airflow")
     }
-    _ = try hold.targets(snapshot: snapshot(primary: 28, battery: 31, cpu: 50, secondary: 31.2),
-                          mode: .automatic, manualRPM: 3000, now: 122)
-    for now in stride(from: 124.0, through: 242.0, by: 2) {
-        let decision = try hold.targets(snapshot: snapshot(primary: 28, battery: 31, cpu: 50, secondary: 30),
+    _ = try hold.targets(snapshot: snapshot(primary: 28, battery: 30.2, cpu: 70, secondary: 29.2),
+                          mode: .automatic, manualRPM: 3000, now: 182)
+    for now in stride(from: 184.0, through: 362.0, by: 2) {
+        let decision = try hold.targets(snapshot: snapshot(primary: 28, battery: 30.2, cpu: 70, secondary: 29),
                                          mode: .automatic, manualRPM: 3000, now: now)
         expect(decision.values[0] == 5000 && hold.bodyCooling,
-               "an unsettled body reference resets the full two-minute confirmation")
+               "an unsettled body reference resets the full three-minute confirmation")
     }
-    let released = try hold.targets(snapshot: snapshot(primary: 28, battery: 31, cpu: 50, secondary: 30),
-                                    mode: .automatic, manualRPM: 3000, now: 244)
+    let released = try hold.targets(snapshot: snapshot(primary: 28, battery: 30.2, cpu: 70, secondary: 29),
+                                    mode: .automatic, manualRPM: 3000, now: 364)
     expect(!hold.bodyCooling && released.values[0] == 5000, "stable body cooling releases the hold without an immediate RPM drop")
     var previous = 5000.0
-    for now in stride(from: 246.0, through: 280.0, by: 2) {
-        let target = try hold.targets(snapshot: snapshot(primary: 28, battery: 31, cpu: 50, secondary: 30),
+    for now in stride(from: 366.0, through: 400.0, by: 2) {
+        let target = try hold.targets(snapshot: snapshot(primary: 28, battery: 30.2, cpu: 70, secondary: 29),
                                       mode: .automatic, manualRPM: 3000, now: now).values[0]!
         expect(previous - target <= 400 && target <= previous, "body-cooling release uses the normal gradual descent")
         previous = target
     }
-    expect(previous == 2200, "lower body temperatures eventually return to their lower curve target")
+    expect(abs(previous - 2840) < 0.01, "lower body temperatures eventually return to their lower curve target")
 
     var gap = ControlPolicy()
-    _ = try gap.targets(snapshot: snapshot(primary: 28, battery: 31, cpu: 50, actual: 5000, secondary: 32),
+    _ = try gap.targets(snapshot: snapshot(primary: 28, battery: 30.2, cpu: 70, actual: 5000, secondary: 32),
                          mode: .automatic, manualRPM: 3000, now: 0)
-    _ = try gap.targets(snapshot: snapshot(primary: 28, battery: 31, cpu: 50, secondary: 30),
+    _ = try gap.targets(snapshot: snapshot(primary: 28, battery: 30.2, cpu: 70, secondary: 29),
                          mode: .automatic, manualRPM: 3000, now: 2)
-    let delayed = try gap.targets(snapshot: snapshot(primary: 28, battery: 31, cpu: 50, secondary: 30),
-                                  mode: .automatic, manualRPM: 3000, now: 130)
+    let delayed = try gap.targets(snapshot: snapshot(primary: 28, battery: 30.2, cpu: 70, secondary: 29),
+                                  mode: .automatic, manualRPM: 3000, now: 190)
     expect(delayed.values[0] == 5000 && gap.bodyCooling, "a sampling gap cannot be mistaken for completed body cooling")
-    let manual = try gap.targets(snapshot: snapshot(primary: 28, battery: 31, cpu: 50, secondary: 32),
-                                 mode: .manual, manualRPM: 2400, now: 132)
+    let manual = try gap.targets(snapshot: snapshot(primary: 28, battery: 30.2, cpu: 70, secondary: 32),
+                                 mode: .manual, manualRPM: 2400, now: 192)
     expect(manual.values[0] == 2400, "body-comfort cooling is automatic behavior and respects explicit manual control")
-    let automatic = try gap.targets(snapshot: snapshot(primary: 28, battery: 31, cpu: 50, actual: 2400, secondary: 32),
-                                    mode: .automatic, manualRPM: 2400, now: 134)
+    let automatic = try gap.targets(snapshot: snapshot(primary: 28, battery: 30.2, cpu: 70, actual: 2400, secondary: 32),
+                                    mode: .automatic, manualRPM: 2400, now: 194)
     expect(automatic.values[0]! > 2400 && gap.bodyCooling, "returning to automatic resumes body-based cooling")
 
     var chargingWake = ControlPolicy()
     for tick in 0...10 {
-        _ = try chargingWake.targets(snapshot: snapshot(primary: 27, battery: 30.5, cpu: 50, secondary: 29, charging: true),
+        _ = try chargingWake.targets(snapshot: snapshot(primary: 27, battery: 29.4, cpu: 50, secondary: 29, charging: true),
                                       mode: .automatic, manualRPM: 3000, now: Double(tick * 2))
     }
-    let wake = try chargingWake.targets(snapshot: snapshot(primary: 27, battery: 30.6, cpu: 50, secondary: 29, charging: true),
+    let wake = try chargingWake.targets(snapshot: snapshot(primary: 27, battery: 30, cpu: 50, secondary: 29, charging: true),
                                         mode: .automatic, manualRPM: 3000, now: 22)
     expect(!wake.standby && !wake.values.isEmpty, "charging warms out of standby before the former 32-degree battery threshold")
+}
+
+private func checkNovemberComfort() throws {
+    // Replay the screenshot and subsequent CPU cooldown, without assuming Ts1P
+    // is a surface thermometer or treating the user's warm report as comfortable.
+    for secondary in [29.0, 30.0, nil] {
+        var policy = ControlPolicy()
+        var previous = 3911.0
+        for tick in 0...15 {
+            let decision = try policy.targets(snapshot: snapshot(primary: 27, battery: 31.3,
+                cpu: tick == 0 ? 68 : 50, actual: 3911, secondary: secondary),
+                mode: .automatic, manualRPM: 3000, now: Double(tick * 2))
+            let target = decision.values[0]!
+            expect(!decision.standby && policy.bodyCooling && target >= previous && target <= 5000 && target - previous <= 800,
+                   "November warm feedback ramps to the daily ceiling even as the CPU cools or Ts0P is unavailable")
+            previous = target
+        }
+        expect(previous == 5000, "the new low-temperature warm report reaches full daily airflow")
+        for tick in 16...170 {
+            let decision = try policy.targets(snapshot: snapshot(primary: 27, battery: 30.8, cpu: 50, secondary: 29),
+                mode: .automatic, manualRPM: 3000, now: Double(tick * 2))
+            expect(policy.bodyCooling && decision.values[0] == 5000,
+                   "a small battery cooldown below entry does not release body cooling after three minutes")
+        }
+    }
+
+    // Historical cold reports must still allow firmware standby, including the
+    // warmer of the two reports. A sampling outage is not continuous cold evidence.
+    for cold in [snapshot(primary: 26.996, battery: 29.4, cpu: 61.844, secondary: 28.996),
+                 snapshot(primary: 27.996, battery: 30.2, cpu: 65.563, secondary: 28.996)] {
+        var policy = ControlPolicy()
+        for tick in 0...10 {
+            let decision = try policy.targets(snapshot: cold, mode: .automatic, manualRPM: 3000, now: Double(tick * 2))
+            expect(decision.standby == (tick == 10), "both recorded cold samples preserve the 20-second standby confirmation")
+        }
+        let waking = try policy.targets(snapshot: snapshot(primary: 27, battery: 30.5, cpu: 60, secondary: 29),
+            mode: .automatic, manualRPM: 3000, now: 22)
+        expect(!waking.standby && !waking.values.isEmpty, "standby exits before the 31.3-degree warm report")
+    }
+    var gap = ControlPolicy()
+    for now in [0.0, 2, 30, 32, 48] {
+        let decision = try gap.targets(snapshot: snapshot(primary: 27, battery: 29.4, cpu: 60),
+            mode: .automatic, manualRPM: 3000, now: now)
+        expect(!decision.standby, "missing samples cannot satisfy the cold standby timer")
+    }
+
+    var secondaryWake = ControlPolicy()
+    for tick in 0...10 {
+        _ = try secondaryWake.targets(snapshot: snapshot(primary: 27, battery: 29.4, cpu: 60, secondary: 29),
+            mode: .automatic, manualRPM: 3000, now: Double(tick * 2))
+    }
+    let wakingSecondary = try secondaryWake.targets(snapshot: snapshot(primary: 27, battery: 29.4, cpu: 60, secondary: 30),
+        mode: .automatic, manualRPM: 3000, now: 22)
+    expect(!wakingSecondary.standby, "secondary-reference warming also wakes standby before the body-hold threshold")
+    for charging in [false, true] {
+        var policy = ControlPolicy()
+        for tick in 0...30 {
+            let decision = try policy.targets(snapshot: snapshot(primary: 27, battery: charging ? 30 : 30.3,
+                cpu: 50, secondary: 29, charging: charging),
+                mode: .automatic, manualRPM: 3000, now: Double(tick * 2))
+            expect(!decision.standby, "pre-cooling airflow is not lost to the former 30.5-degree standby entry")
+        }
+    }
+
+    var postEmergency = ControlPolicy()
+    for tick in 0...40 {
+        let decision = try postEmergency.targets(snapshot: snapshot(primary: 27, battery: 31.3,
+            cpu: tick == 0 ? 93.5 : 65, actual: 3911, secondary: 29),
+            mode: .automatic, manualRPM: 3000, now: Double(tick * 2))
+        expect(!decision.standby && decision.values[0]! >= 5000,
+               "the observed CPU spike and cooldown never drop below body airflow while the battery remains warm")
+        if tick == 40 {
+            expect(postEmergency.coolingPhase == .normal && decision.values[0] == 5000 && postEmergency.bodyCooling,
+                   "emergency recovery finishes at the daily ceiling while body cooling continues")
+        }
+    }
+    var limited = ControlPolicy()
+    let hardwareLimit = try limited.targets(snapshot: snapshot(primary: 27, battery: 31.3, cpu: 50,
+        actual: 4500, maximum: 4500, secondary: 29), mode: .automatic, manualRPM: 3000, now: 0)
+    expect(hardwareLimit.values[0] == 4500, "earlier body cooling still respects a lower hardware ceiling")
 }
 
 private func checkEmergencyRecovery() throws {
@@ -257,6 +400,7 @@ private final class TimedModeHardware: FanHardware {
 
 @main enum Tests {
     static func main() throws {
+        try checkServiceStartup()
         var lifecycle = ControlLifecycle()
         lifecycle.sleep(); lifecycle.wake(now: 0)
         expect(!lifecycle.requested && !lifecycle.shouldReconnect(now: 10), "sleep never enables a switch the user left off")
@@ -388,11 +532,11 @@ private final class TimedModeHardware: FanHardware {
         for i in 1...10 { _ = try policy.targets(snapshot: snapshot(), mode: .automatic, manualRPM: 3000, now: Double(i * 2)) }
         let settled = try policy.targets(snapshot: snapshot(), mode: .automatic, manualRPM: 3000, now: 22)
         expect(settled.values[0] == 5000, "warm body references settle at the daily ceiling even with a cool CPU")
-        let reduced = try policy.targets(snapshot: snapshot(primary: 28, battery: 31), mode: .automatic, manualRPM: 3000, now: 24)
+        let reduced = try policy.targets(snapshot: snapshot(primary: 27, battery: 30, cpu: 70), mode: .automatic, manualRPM: 3000, now: 24)
         expect(reduced.values[0]! == settled.values[0]!, "hold speed during cooling")
         var last = reduced.values[0]!
-        for i in 13...110 {
-            let next = try policy.targets(snapshot: snapshot(primary: 28, battery: 31), mode: .automatic, manualRPM: 3000, now: Double(i * 2)).values[0]!
+        for i in 13...150 {
+            let next = try policy.targets(snapshot: snapshot(primary: 27, battery: 30, cpu: 70), mode: .automatic, manualRPM: 3000, now: Double(i * 2)).values[0]!
             expect(last - next <= 400.01, "automatic decline stays within comfortable-zone ramp limit")
             last = next
         }
@@ -410,7 +554,7 @@ private final class TimedModeHardware: FanHardware {
         expect(warmAgain.values[0] == maintained, "renewed warming retains airflow without waiting for CPU heat")
         var cooledAgain = warmAgain.values[0]!
         for tick in 37...180 {
-            cooledAgain = try comfortCycle.targets(snapshot: snapshot(primary: 28, battery: 31, cpu: 64),
+            cooledAgain = try comfortCycle.targets(snapshot: snapshot(primary: 27, battery: 30, cpu: 70),
                 mode: .automatic, manualRPM: 5000, now: Double(tick * 2)).values[0]!
         }
         expect(cooledAgain < 3000, "sustained cooling of body references eventually permits lower automatic speed")
@@ -465,6 +609,7 @@ private final class TimedModeHardware: FanHardware {
 
         try checkEmergencyRecovery()
         try checkBodyComfort()
+        try checkNovemberComfort()
 
         let hw = MockHardware()
         let live = FanActuator(hw)

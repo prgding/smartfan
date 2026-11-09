@@ -52,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     private let power = NSTextField(labelWithString: "—")
     private let time = NSTextField(labelWithString: "每 2 秒更新")
     private let manualHint = NSTextField(wrappingLabelWithString: "日常上限 5000 RPM；紧急过热时可全速。")
-    private let version = "1.9"
+    private let version = "1.9.2"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -288,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "SmartFan \(version) · 提前保持舒适"
-        alert.informativeText = "自动模式主要按电池、充电状态、Ts1P 与 Ts0P 掌托候选参考控制风量；CPU 曲线保留为安全保护。\n\n自动与手动模式的日常目标上限均为 5000 RPM（仍受硬件范围限制）；紧急过热可突破上限至硬件最高转速。全速后需 CPU ≤86°C 且系统无热压力连续 15 秒，再以每秒最多 150 RPM 平稳降回日常上限。CPU 回升至 88°C 或出现热压力时暂缓降速，再次触发紧急条件则立即全速。\n\n更早预冷：电池 31 / 32 / 33°C 对应约 2200 / 3800 / 5000 RPM，充电时提前 0.5°C；Ts1P 29 / 30°C 对应约 3200 / 5000 RPM，Ts0P 31 / 31.5°C 对应约 3500 / 5000 RPM。升温趋势还可提前提高转速。达到积热条件后保持日常上限；只有预测 Ts1P ≤29°C、电池参考 ≤32°C、Ts0P ≤31°C 且无热压力持续 2 分钟，才解除保持并缓慢降速。CPU 降温不会单独解除机身散热。\n\n冰凉时自动待机：参考温度持续偏低 20 秒后暂用硬件自动模式，允许自行停转；开关与监测保持开启。温度上升或 CPU ≥ 75°C 时自动重新接管。\n\nCPU ≥ 92°C 或严重热压力时使用最高转速，手动模式也保留保护。休眠时暂时释放，唤醒后自动恢复原来的控制；短暂断连会自动重连，连续失败或硬件故障会明确报错。用户关闭或退出时释放控制。\n\n这些曲线仍需按你的体感校准，传感器位置尚未核实。每 30 秒保存温度记录，并记录控制暂停与恢复的原因。"
+        alert.informativeText = "自动模式主要按电池、充电状态、Ts1P 与 Ts0P 掌托候选参考控制风量；CPU 曲线保留为安全保护。\n\n自动与手动模式的日常目标上限均为 5000 RPM（仍受硬件范围限制）；紧急过热可突破上限至硬件最高转速。全速后需 CPU ≤86°C 且系统无热压力连续 15 秒，再以每秒最多 150 RPM 平稳降回日常上限。CPU 回升至 88°C 或出现热压力时暂缓降速，再次触发紧急条件则立即全速。\n\n更早预冷：电池 30 / 30.5 / 31°C 对应约 2200 / 3800 / 5000 RPM，充电时提前 0.5°C；Ts1P 29 / 30°C 对应约 3200 / 5000 RPM，Ts0P 31 / 31.5°C 对应约 3500 / 5000 RPM。升温趋势还可提前提高转速。达到积热条件后保持日常上限；只有预测 Ts1P ≤28°C、电池参考 ≤30.2°C、Ts0P ≤29°C 且无热压力持续 3 分钟，才解除保持并缓慢降速。CPU 降温不会单独解除机身散热。\n\n冰凉时自动待机：参考温度持续偏低 20 秒后暂用硬件自动模式，允许自行停转；开关与监测保持开启。电池预测参考 ≥30.5°C（含充电提前量）、Ts1P ≥29°C、Ts0P ≥30°C 或 CPU ≥75°C 时自动重新接管。\n\nCPU ≥ 92°C 或严重热压力时使用最高转速，手动模式也保留保护。休眠时暂时释放，唤醒后自动恢复原来的控制；短暂断连会自动重连，连续失败或硬件故障会明确报错。用户关闭或退出时释放控制。\n\n这些曲线仍需按你的体感校准，传感器位置尚未核实。每 30 秒保存温度记录，并记录控制暂停与恢复的原因。"
         alert.addButton(withTitle: "知道了"); alert.runModal()
     }
     @objc private func willSleep() { controller.prepareForSleep() }
