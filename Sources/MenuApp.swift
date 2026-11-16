@@ -52,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     private let power = NSTextField(labelWithString: "—")
     private let time = NSTextField(labelWithString: "每 2 秒更新")
     private let manualHint = NSTextField(wrappingLabelWithString: "日常上限 5000 RPM；紧急过热时可全速。")
-    private let version = "1.9.2"
+    private let version = "1.9.3"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -218,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let rpm = snapshot.fans.first.map { String(Int($0.actual.rounded())) } ?? "—"
         statusItem.button?.image = CompactStatusImage.make(temperature: stale ? "—°" : degree, rpm: stale ? "—" : rpm)
         statusItem.button?.setAccessibilityLabel(stale ? "SmartFan，温度数据已过期" : "SmartFan，Ts1P \(degree)，风扇 \(rpm) RPM")
-        statusItem.button?.toolTip = "SmartFan · Ts1P \(temperature(snapshot.primary)) · \(stateLabel.stringValue)"
+        statusItem.button?.toolTip = nil
         if controller.authorizing {
             manualHint.stringValue = controller.installing ? "首次安装或更新服务需要授权，转速尚未应用。" : "正在连接后台服务，转速尚未应用。"
         } else if controller.enabled && !manual && controller.targets.isEmpty {
